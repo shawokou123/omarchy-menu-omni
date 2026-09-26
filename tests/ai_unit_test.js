@@ -151,7 +151,7 @@ function drainToReady(maxTicks) {
 
 // argv safety: prompt must always be a single literal argv element, never
 // concatenated into another string, for every adapter.
-for (const id of ["claude", "codex", "agy", "opencode", "pi"]) {
+for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb"]) {
   const adapter = AiAdapters.get(id)
   assert(adapter !== null, "adapter registered: " + id)
   const nasty = "\"'; $(echo hi) `uname` | ; \n中文 🚀"
@@ -365,8 +365,78 @@ for (const id of ["claude", "codex", "agy", "opencode", "pi"]) {
 }
 
 {
+  // The web bridge adapters: the answer is streamed out of a chat tab in the
+  // user's own Chrome by ~/.local/bin/dsweb. The event lines asserted here are
+  // the ones that client actually writes; the two change together. Both
+  // adapters share one shape, so they are asserted together.
+  const webAgents = [
+    { id: "dsweb", label: "DeepSeek Web", target: "DeepSeek" },
+    { id: "gptweb", label: "ChatGPT Web", target: "ChatGPT" }
+  ]
+  for (const spec of webAgents) {
+    const adapter = AiAdapters.get(spec.id)
+    assert(adapter !== null, "web adapter registered: " + spec.id)
+    eq(adapter.label, spec.label, spec.id + " is labelled for the agent picker")
+    eq(adapter.binary, "dsweb", spec.id + " spawns the web bridge client")
+    eq(adapter.capabilities.continuity, "none", spec.id + " has no CLI session to continue")
+    eq(adapter.createSessionRef(), null, spec.id + " never mints a session id")
+
+    const argv = adapter.buildRun("什么是正则", null, AiConfig.defaults())
+    eq(argv, ["dsweb", "-s", spec.id, "ask", "什么是正则"],
+      spec.id + " buildRun names its site so the bridge drives the right tab")
+    eq(adapter.buildResume("anything", AiConfig.defaults()), ["dsweb", "status"],
+      spec.id + " buildResume reports the bridge state instead of opening a terminal")
+
+    const ps = {}
+    let text = ""
+    let activity = null
+    let error = null
+    const lines = [
+      '{"type":"activity","activity":"thinking"}',
+      '{"type":"text","text":"1+1"}',
+      '{"type":"text","text":"等于2。"}',
+      '{"type":"done"}',
+      '{"type":"status","extension":true}'
+    ]
+    for (const line of lines) {
+      for (const ev of adapter.parseLine(line, ps)) {
+        if (ev.type === "text") text += ev.text
+        if (ev.type === "activity") activity = ev.activity
+        if (ev.type === "error") error = ev.message
+      }
+    }
+    eq(text, "1+1等于2。", spec.id + " adapter concatenates the streamed deltas")
+    eq(activity, "thinking", spec.id + " adapter surfaces the page's activity")
+    eq(error, null, spec.id + " done/status lines carry no error")
+    eq(adapter.parseLine('{"type":"done"}', ps).length, 0,
+      spec.id + " the done event ends the run without extra events")
+
+    // Failures: the kind decides the message the panel shows, and the message
+    // has to name the site the user is actually looking at.
+    const auth = adapter.parseLine('{"type":"error","kind":"auth"}', ps)
+    eq(auth.length, 1, spec.id + " adapter forwards bridge errors")
+    eq(auth[0].type, "error", "the forwarded event is an error event")
+    assert(/sign in/i.test(auth[0].message), "an auth failure tells the user to sign in: " + auth[0].message)
+    assert(auth[0].message.indexOf(spec.target) !== -1,
+      "an auth failure names " + spec.target + ": " + auth[0].message)
+    const bridge = adapter.parseLine('{"type":"error","kind":"bridge"}', ps)
+    assert(/chrome/i.test(bridge[0].message), "a bridge failure points at Chrome: " + bridge[0].message)
+    const challenge = adapter.parseLine('{"type":"error","kind":"challenge"}', ps)
+    assert(/cloudflare/i.test(challenge[0].message),
+      "a Cloudflare challenge is explained rather than shown raw: " + challenge[0].message)
+    const unknown = adapter.parseLine('{"type":"error","kind":"something_new","message":"boom"}', ps)
+    eq(unknown[0].message, "boom", "an unknown kind falls back to the bridge's own message")
+
+    const cls = adapter.classifyFailure(1, "The Chrome bridge is not running (start Chrome, then retry)")
+    assert(cls && cls.kind === "bridge", spec.id + " classifyFailure names a missing bridge")
+    const clsAuth = adapter.classifyFailure(1, spec.target + " is not signed in in that Chrome tab")
+    assert(clsAuth && clsAuth.kind === "auth", spec.id + " classifyFailure names a signed-out page")
+  }
+}
+
+{
   // Malformed JSON / unknown event types must never throw for any adapter.
-  for (const id of ["claude", "codex", "agy", "opencode", "pi"]) {
+  for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb"]) {
     const adapter = AiAdapters.get(id)
     let threw = false
     try {
@@ -1155,8 +1225,14 @@ for (const id of ["claude", "codex", "agy", "opencode", "pi"]) {
   assert(agy.indexOf("--dangerously-skip-permissions") === -1, "agy never skips permissions")
 
   assert(!!AiAdapters.get("opencode").disabledReason, "opencode is disabled for headless runs")
-  assert(!!AiAdapters.get("agy").disabledReason, "agy is disabled for headless runs (no way to drop its MCP servers)")
-  eq(AiBackend.selectableAgents().map((a) => a.id), ["claude", "codex", "pi"], "only claude, codex and pi are offered")
+  // LOCAL MODIFICATION (this machine only, not upstream): the disabledReason
+  // gate on agy was removed, so agy is now offered alongside the others.
+  // Upstream asserts the opposite here — that agy carries a disabledReason and
+  // is filtered out of selectableAgents() — because a headless agy run cannot
+  // be kept away from its MCP servers and plugins. Restore both the field in
+  // ai/AiAdapters.js and the upstream assertions when that matters again.
+  assert(!AiAdapters.get("agy").disabledReason, "agy is offered for headless runs (local modification)")
+  eq(AiBackend.selectableAgents().map((a) => a.id), ["claude", "codex", "agy", "pi", "dsweb", "gptweb"], "claude, codex, agy, pi, dsweb and gptweb are offered")
   AiBackend.loadConfig(JSON.stringify({ agent: "opencode" }), "")
   const g = AiBackend.beginGeneration("q")
   eq(g.argv, null, "a disabled adapter never produces an argv to spawn")

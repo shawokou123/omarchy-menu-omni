@@ -286,8 +286,12 @@ Item {
   }
 
   function aiHandoff() {
-    if (!ai.aiSession || ai.aiSession.state !== "ready" || !ai.aiSession.canHandoff) return
+    if (!ai.aiSession || ai.aiSession.state !== "ready") return
+    // Re-asking an edited question comes first: an adapter with no session to
+    // continue (DeepSeek Web: continuity "none", canHandoff false) has no
+    // terminal handoff at all, and this is the only thing Enter could mean.
     if (ai.aiCanReask()) { ai.aiSubmit(); return }
+    if (!ai.aiSession.canHandoff) return
     var resumeArgv = AiBackend.buildHandoffArgv()
     if (!resumeArgv) return
     var snap = AiBackend.beginHandoff()
