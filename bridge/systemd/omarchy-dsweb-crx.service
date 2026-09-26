@@ -1,0 +1,6 @@
+[Unit]
+Description=Serve the DeepSeek Web bridge CRX to Chrome (socket activated)
+
+[Service]
+Type=simple
+ExecStart=/home/cuiyang/.local/bin/omarchy-dsweb-crx-serve

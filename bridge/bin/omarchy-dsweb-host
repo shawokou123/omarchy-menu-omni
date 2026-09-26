@@ -1,0 +1,514 @@
+#!/usr/bin/python3
+"""Native messaging host for the Omarchy Web bridge.
+
+Chrome starts this process when the bridge extension opens its native messaging
+port. It speaks two protocols:
+
+  * stdin/stdout  - native messaging frames (4-byte little-endian length + JSON)
+                    to and from the extension's service worker.
+  * unix socket   - one JSON line in, JSON lines out, for local clients such as
+                    the `dsweb` command the launcher spawns.
+
+The extension reports the whole answer text after every change; the diffing
+into streamable deltas happens here, so the content script can stay dumb.
+"""
+
+import json
+import os
+import selectors
+import signal
+import socket
+import struct
+import sys
+import threading
+import time
+import uuid
+
+PING_SECONDS = 20
+ASK_TIMEOUT = 300.0
+STATUS_STALE = 90.0
+
+# Site ids the extension knows. The host never touches a page itself: it only
+# tags each request so the service worker can pick the right tab and script.
+SITE_LABEL = {"dsweb": "DeepSeek", "gptweb": "ChatGPT"}
+DEFAULT_SITE = "dsweb"
+
+
+def label(site):
+    return SITE_LABEL.get(site) or SITE_LABEL[DEFAULT_SITE]
+
+_send_lock = threading.Lock()
+_state_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------- diagnostics
+
+
+def _debug_flag():
+    return os.path.join(os.path.dirname(SOCKET_PATH), "omarchy-dsweb-debug")
+
+
+def _log_path():
+    return os.path.join(os.path.dirname(SOCKET_PATH), "omarchy-dsweb-host.log")
+
+
+def dlog(fmt, *args):
+    """Append one line to the diagnostic log, when the flag file exists.
+
+    The host is started by Chrome, so there is no environment to switch this
+    on with: `touch $XDG_RUNTIME_DIR/omarchy-dsweb-debug` enables it and a
+    restart of the host picks it up.
+    """
+    if not os.path.exists(_debug_flag()):
+        return
+    try:
+        with open(_log_path(), "a") as fh:
+            fh.write("%.3f %s\n" % (time.time(), fmt % args if args else fmt))
+    except OSError:
+        pass
+
+state = {
+    "last_extension_rx": 0.0,
+    "ask": None,          # {"id", "conn", "text", "activity_sent", "any_frame"}
+    # In-flight read-only requests (probe, reload), keyed by request id. They
+    # never take the question slot, so the page stays inspectable and
+    # reloadable while a question is running.
+    "aux": {},            # id -> {"conn", "started"}
+}
+
+
+# --------------------------------------------------------------- native side
+
+
+def send_to_extension(obj):
+    dlog("host->ext %s", json.dumps(obj, separators=(",", ":"))[:300])
+    data = json.dumps(obj, separators=(",", ":")).encode("utf-8")
+    with _send_lock:
+        try:
+            sys.stdout.buffer.write(struct.pack("<I", len(data)))
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+            return True
+        except (BrokenPipeError, ValueError, OSError):
+            return False
+
+
+def read_exact(stream, n):
+    buf = b""
+    while len(buf) < n:
+        chunk = stream.read(n - len(buf))
+        if not chunk:
+            return None
+        buf += chunk
+    return buf
+
+
+def stdin_reader():
+    stream = sys.stdin.buffer
+    while True:
+        header = read_exact(stream, 4)
+        if header is None:
+            break
+        (length,) = struct.unpack("<I", header)
+        if length == 0 or length > 64 * 1024 * 1024:
+            break
+        payload = read_exact(stream, length)
+        if payload is None:
+            break
+        try:
+            msg = json.loads(payload.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        try:
+            from_extension(msg)
+        except Exception:
+            continue
+    # Chrome closed the port: nothing left to serve.
+    cleanup_and_exit()
+
+
+def cleanup_and_exit():
+    try:
+        os.unlink(SOCKET_PATH)
+    except OSError:
+        pass
+    os._exit(0)
+
+
+def ping_loop():
+    while True:
+        time.sleep(PING_SECONDS)
+        if not send_to_extension({"op": "ping"}):
+            os._exit(0)
+
+
+# ------------------------------------------------------------- client side
+
+
+def send_json(conn, obj):
+    try:
+        conn.sendall((json.dumps(obj, separators=(",", ":")) + "\n").encode("utf-8"))
+        dlog("host->client %s", json.dumps(obj, separators=(",", ":"))[:200])
+        return True
+    except OSError as exc:
+        dlog("host->client FAILED %s", exc)
+        return False
+
+
+def close_conn(conn):
+    """Hang up on a client.
+
+    shutdown() has to come first: the cancel watcher is parked in a blocking
+    recv() on this same socket, and a plain close() would leave the file
+    description alive until that recv returns, so the client would never see
+    end-of-file and would wait for the answer until its own timeout.
+    """
+    try:
+        conn.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        conn.close()
+    except OSError:
+        pass
+
+
+def client_send(obj):
+    with _state_lock:
+        ask = state["ask"]
+    if not ask:
+        return
+    conn = ask["conn"]
+    if not send_json(conn, obj):
+        close_ask("client disconnected", send_error=False)
+
+
+def close_ask(reason=None, send_error=True, kind="cancel"):
+    with _state_lock:
+        ask = state["ask"]
+        state["ask"] = None
+    if not ask:
+        dlog("close_ask: nothing to close (%s)", reason)
+        return
+    dlog("close_ask: closing client connection (%s)", reason)
+    if send_error and reason:
+        send_json(ask["conn"], {"type": "error", "message": reason, "kind": kind})
+    close_conn(ask["conn"])
+    dlog("close_ask: closed")
+
+
+def from_extension(msg):
+    op = msg.get("op")
+    dlog("ext->host %s", json.dumps(msg, separators=(",", ":"))[:300])
+    with _state_lock:
+        state["last_extension_rx"] = time.time()
+
+    if op == "pong" or op == "hello":
+        return
+
+    ask_id = msg.get("id")
+
+    with _state_lock:
+        aux = state["aux"].pop(ask_id, None) if ask_id else None
+    if aux is not None:
+        if op == "probe-result":
+            send_json(aux["conn"], {"type": "probe", "data": msg.get("data")})
+        elif op == "reloaded":
+            send_json(aux["conn"], {"type": "status", "reloaded": True, "tabId": msg.get("tabId")})
+        else:
+            send_json(
+                aux["conn"],
+                {
+                    "type": "error",
+                    "message": msg.get("message") or "the page did not answer",
+                    "kind": msg.get("kind"),
+                },
+            )
+        close_conn(aux["conn"])
+        return
+
+    with _state_lock:
+        ask = state["ask"]
+
+    if ask is None or ask_id != ask["id"]:
+        return  # stale reply from a cancelled or finished run
+
+    ask["any_frame"] = True
+
+    if op == "snapshot":
+        text = msg.get("text") or ""
+        if not isinstance(text, str):
+            return
+        known = ask["text"]
+        if text.startswith(known):
+            delta = text[len(known):]
+        elif text == known:
+            delta = ""
+        else:
+            # The page rewrote its answer (rare); resend the whole thing.
+            delta = text
+        if delta:
+            ask["text"] = text
+            client_send({"type": "text", "text": delta})
+    elif op == "progress":
+        if not ask["activity_sent"]:
+            ask["activity_sent"] = True
+            client_send({"type": "activity", "activity": msg.get("activity") or "thinking"})
+    elif op == "done":
+        client_send({"type": "done"})
+        close_ask(send_error=False)
+    elif op == "error":
+        client_send(
+            {
+                "type": "error",
+                "message": msg.get("message") or "The page bridge reported an error",
+                "kind": msg.get("kind"),
+            }
+        )
+        close_ask(send_error=False)
+
+
+def ask_timeout_watch():
+    while True:
+        time.sleep(2)
+        with _state_lock:
+            ask = state["ask"]
+            gone = [i for i, a in state["aux"].items() if time.time() - a["started"] > ASK_TIMEOUT]
+            dropped = [state["aux"].pop(i)["conn"] for i in gone]
+        for conn in dropped:
+            # A read-only request whose page never answered must not hold its
+            # client open forever.
+            close_conn(conn)
+        if not ask:
+            continue
+        elapsed = time.time() - ask["started"]
+        if not ask.get("any_frame") and elapsed > 8:
+            # The port is open, but the service worker never answered: it is
+            # usually stopped, or the extension was reloaded under it.
+            close_ask(
+                "The Chrome bridge did not answer (reload the %s tab or restart Chrome)"
+                % label(ask.get("site")),
+                kind="bridge",
+            )
+            continue
+        if elapsed > ASK_TIMEOUT:
+            send_to_extension({"op": "cancel", "id": ask["id"]})
+            close_ask("%s did not answer in time" % label(ask.get("site")), kind="timeout")
+
+
+def watch_disconnect(conn, ask_id):
+    """Cancel the run when the client goes away.
+
+    The launcher kills the client process when the user abandons a question
+    (Escape, or a timeout), so the socket reaching EOF is the cancel signal:
+    the page would otherwise keep generating an answer nobody reads.
+    """
+    try:
+        while True:
+            chunk = conn.recv(4096)
+            if not chunk:
+                break
+    except OSError:
+        pass
+    with _state_lock:
+        ask = state["ask"]
+        mine = ask is not None and ask["id"] == ask_id
+    if mine:
+        send_to_extension({"op": "cancel", "id": ask_id})
+        close_ask(send_error=False)
+
+
+def handle_client(conn):
+    conn.settimeout(ASK_TIMEOUT + 30)
+    buf = b""
+    try:
+        while b"\n" not in buf:
+            chunk = conn.recv(65536)
+            if not chunk:
+                close_conn(conn)
+                return
+            buf += chunk
+    except OSError:
+        close_conn(conn)
+        return
+
+    line = buf.split(b"\n", 1)[0]
+    try:
+        req = json.loads(line.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        send_json(conn, {"type": "error", "message": "malformed request", "kind": "protocol"})
+        close_conn(conn)
+        return
+
+    cmd = req.get("cmd")
+    dlog("client->host %s", json.dumps(req, separators=(",", ":"))[:300])
+    stale = time.time() - state["last_extension_rx"] > STATUS_STALE
+
+    if cmd == "status":
+        send_json(
+            conn,
+            {
+                "type": "status",
+                "extension": not stale,
+                "secondsSinceExtension": round(time.time() - state["last_extension_rx"], 1)
+                if state["last_extension_rx"]
+                else None,
+                "busy": state["ask"] is not None,
+                "socket": SOCKET_PATH,
+            },
+        )
+        close_conn(conn)
+        return
+
+    if cmd in ("probe", "reload", "selftest"):
+        # Read-only page operations: no question slot, so they stay available
+        # while one is running. That is exactly when the page is worth looking
+        # at, and a reload is the way out of a run that has wedged.
+        site = str(req.get("site") or DEFAULT_SITE)
+        if site not in SITE_LABEL:
+            send_json(conn, {"type": "error", "message": "unknown site: %s" % site, "kind": "protocol"})
+            close_conn(conn)
+            return
+        aux_id = uuid.uuid4().hex
+        with _state_lock:
+            state["aux"][aux_id] = {"conn": conn, "started": time.time()}
+        msg = {"op": cmd, "id": aux_id, "site": site}
+        sel = selector_overrides(site)
+        if sel:
+            msg["sel"] = sel
+        if not send_to_extension(msg):
+            with _state_lock:
+                state["aux"].pop(aux_id, None)
+            send_json(conn, {"type": "error", "message": "The Chrome bridge is not reachable (restart Chrome and retry)", "kind": "bridge"})
+            close_conn(conn)
+        return
+
+    if cmd == "ask":
+        site = str(req.get("site") or DEFAULT_SITE)
+        if site not in SITE_LABEL:
+            send_json(conn, {"type": "error", "message": "unknown site: %s" % site, "kind": "protocol"})
+            close_conn(conn)
+            return
+        with _state_lock:
+            if state["ask"] is not None:
+                send_json(conn, {"type": "error", "message": "another question is still running", "kind": "busy"})
+                close_conn(conn)
+                return
+            ask = {
+                "id": uuid.uuid4().hex,
+                "conn": conn,
+                "site": site,
+                "text": "",
+                "started": time.time(),
+                "activity_sent": False,
+                "any_frame": False,
+            }
+            state["ask"] = ask
+
+        msg = {"op": cmd, "id": ask["id"], "site": site}
+        if cmd == "ask":
+            msg["prompt"] = str(req.get("prompt") or "")
+        sel = selector_overrides(site)
+        if sel:
+            msg["sel"] = sel
+        threading.Thread(target=watch_disconnect, args=(conn, ask["id"]), daemon=True).start()
+        ok = send_to_extension(msg)
+        if not ok:
+            close_ask("The Chrome bridge is not reachable (restart Chrome and retry)", kind="bridge")
+        return
+
+    send_json(conn, {"type": "error", "message": "unknown command", "kind": "protocol"})
+    close_conn(conn)
+
+
+# ------------------------------------------------------------------- startup
+
+
+def socket_path():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    base = runtime if runtime and os.path.isdir(runtime) else "/tmp"
+    return os.path.join(base, "omarchy-dsweb-%d.sock" % os.getuid())
+
+
+def selector_overrides(site):
+    """Optional selector overrides for the content script.
+
+    The chat sites ship generated class names, so when a redesign breaks the
+    bridge the fix is a new entry in this file rather than a new extension
+    release. Keys match the content script's SEL table; the file is re-read on
+    every request so a fix applies immediately.
+
+    A flat object applies to whichever site asked (the original shape). An
+    object whose keys are site ids picks that site's sub-object instead, which
+    is what keeps two sites from sharing one set of overrides by accident.
+    """
+    path = os.environ.get("OMARCHY_DSWEB_SELECTORS") or os.path.join(
+        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+        "omarchy-dsweb",
+        "selectors.json",
+    )
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get(site), dict):
+        data = data[site]
+    clean = {}
+    for key, value in data.items():
+        if isinstance(value, list) and value and all(isinstance(v, str) for v in value):
+            clean[str(key)] = value
+    return clean or None
+
+
+SOCKET_PATH = socket_path()
+
+
+def main():
+    if os.path.exists(SOCKET_PATH):
+        # Only remove a socket nobody is listening on.
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            probe.connect(SOCKET_PATH)
+            probe.close()
+            sys.stderr.write("another omarchy-dsweb-host is already listening on %s\n" % SOCKET_PATH)
+            return 1
+        except OSError:
+            probe.close()
+            try:
+                os.unlink(SOCKET_PATH)
+            except OSError:
+                pass
+
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(SOCKET_PATH)
+    os.chmod(SOCKET_PATH, 0o600)
+    server.listen(8)
+
+    def shutdown(_signum, _frame):
+        cleanup_and_exit()
+
+    signal.signal(signal.SIGTERM, shutdown)
+    signal.signal(signal.SIGINT, shutdown)
+
+    threading.Thread(target=stdin_reader, daemon=True).start()
+    threading.Thread(target=ping_loop, daemon=True).start()
+    threading.Thread(target=ask_timeout_watch, daemon=True).start()
+
+    send_to_extension({"op": "hello"})
+
+    sel = selectors.DefaultSelector()
+    sel.register(server, selectors.EVENT_READ)
+    while True:
+        for key, _ in sel.select(timeout=5):
+            try:
+                conn, _addr = key.fileobj.accept()
+            except OSError:
+                continue
+            threading.Thread(target=handle_client, args=(conn,), daemon=True).start()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

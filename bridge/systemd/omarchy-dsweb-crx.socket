@@ -1,0 +1,9 @@
+[Unit]
+Description=DeepSeek Web bridge CRX update server socket
+
+[Socket]
+ListenStream=127.0.0.1:8788
+BindIPv6Only=ipv6-only
+
+[Install]
+WantedBy=sockets.target

@@ -1,0 +1,63 @@
+#!/usr/bin/python3
+"""Serves the packed dsweb CRX and its Omaha update manifest over an
+inherited socket.
+
+Chrome's ExtensionInstallForcelist policy needs an http(s) update URL, so the
+extension is force-installed from 127.0.0.1. The socket is owned by systemd
+(omarchy-dsweb-crx.socket), which keeps this process at zero cost while Chrome
+is not asking for an update; it exits again once the requests stop.
+"""
+
+import os
+import socket
+import threading
+import time
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+
+ROOT = os.path.expanduser("~/.local/share/omarchy-dsweb/web")
+IDLE_EXIT_SECONDS = 60
+
+last_request = time.time()
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        global last_request
+        last_request = time.time()
+        super().do_GET()
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
+
+def idle_watch():
+    while True:
+        time.sleep(5)
+        if time.time() - last_request > IDLE_EXIT_SECONDS:
+            os._exit(0)
+
+
+def main():
+    if int(os.environ.get("LISTEN_FDS", "0")) >= 1:
+        sock = socket.fromfd(3, socket.AF_INET, socket.SOCK_STREAM)
+    else:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", 8788))
+        sock.listen(16)
+
+    os.chdir(ROOT)
+    httpd = HTTPServer(("127.0.0.1", 8788), Handler, bind_and_activate=False)
+    httpd.socket = sock
+    httpd.server_address = sock.getsockname()
+
+    threading.Thread(target=idle_watch, daemon=True).start()
+    httpd.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

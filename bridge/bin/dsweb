@@ -1,0 +1,310 @@
+#!/usr/bin/python3
+"""Client for the Omarchy Web bridge.
+
+`dsweb ask "<prompt>"` sends the question to the chat tab that is already open
+in Chrome and streams the answer back as JSON lines, one event per line:
+
+    {"type":"activity","activity":"thinking"}
+    {"type":"text","text":"..."}          # delta, appended in order
+    {"type":"done"}
+    {"type":"error","message":"...","kind":"..."}
+
+Those lines are the input of the launcher's AI adapters, so the shape here and
+`ai/AiAdapters.js`'s parseLine change together.
+
+The site selects which tab answers, and defaults to DeepSeek:
+
+    dsweb ask "..."                 # chat.deepseek.com
+    dsweb -s gptweb ask "..."       # chatgpt.com
+"""
+
+import json
+import os
+import re
+import socket
+import sys
+
+TIMEOUT = 330.0
+TERMINAL = ("status", "probe", "done", "error")
+SITE_LABEL = {"dsweb": "DeepSeek", "gptweb": "ChatGPT"}
+DEFAULT_SITE = "dsweb"
+MAX_FILE_BYTES = 500_000
+
+USAGE = "usage: dsweb [-s dsweb|gptweb] ask <prompt> | probe | selftest | status\n"
+
+FILE_REF_PATTERN = re.compile(
+    r"""(?:^|(?<=[\s，。！？；;：:（）\(\)\[\]\{\}\<\>]))@(?:"([^"\n\r]+)"|\'([^\'\n\r]+)\'|([^\s，。！？；;：:（）\(\)\[\]\{\}\<\>"\']+))"""
+)
+
+
+def resolve_file_path(raw):
+    raw = raw.strip()
+    if not raw:
+        return None
+    p = os.path.expanduser(raw)
+    if os.path.isfile(p):
+        return os.path.abspath(p)
+    cand = os.path.abspath(p)
+    if os.path.isfile(cand):
+        return cand
+    home = os.path.expanduser("~")
+    cand = os.path.join(home, raw.lstrip("/"))
+    if os.path.isfile(cand):
+        return cand
+    lower = raw.lower()
+    for prefix in ("/downloads/", "/download/", "downloads/", "download/"):
+        if lower.startswith(prefix):
+            subpath = raw[len(prefix):]
+            cand = os.path.join(home, "Downloads", subpath)
+            if os.path.isfile(cand):
+                return cand
+            break
+    if not any(sep in raw for sep in ("/", "\\")):
+        for d in ("Downloads", "Desktop", "Documents", ""):
+            cand = os.path.join(home, d, raw) if d else os.path.join(home, raw)
+            if os.path.isfile(cand):
+                return cand
+    return None
+
+
+def looks_like_file_ref(p):
+    if any(p.startswith(prefix) for prefix in ("/", "./", "../", "~/", "\\")):
+        return True
+    if "/" in p or "\\" in p:
+        return True
+    ext = os.path.splitext(p)[1].lower()
+    if ext in (
+        ".txt", ".md", ".json", ".csv", ".log", ".py", ".js", ".ts",
+        ".html", ".css", ".c", ".cpp", ".h", ".rs", ".go", ".java",
+        ".sh", ".bash", ".zsh", ".yaml", ".yml", ".xml", ".sql",
+        ".ini", ".conf", ".cfg", ".toml", ".env", ".diff", ".patch",
+        ".rst", ".tex", ".rtf"
+    ):
+        return True
+    return False
+
+
+def read_file_content(path):
+    try:
+        size = os.path.getsize(path)
+        if size > MAX_FILE_BYTES:
+            return None, "文件过大 (%d KB)，网页端单次提问最多支持 %d KB 文本" % (
+                size // 1024, MAX_FILE_BYTES // 1024
+            )
+    except OSError as e:
+        return None, "无法读取文件状态: %s" % e
+
+    try:
+        with open(path, "rb") as f:
+            data = f.read(MAX_FILE_BYTES + 1)
+        if len(data) > MAX_FILE_BYTES:
+            return None, "文件过大，网页端单次提问最多支持 %d KB 文本" % (MAX_FILE_BYTES // 1024)
+        for enc in ("utf-8", "gb18030", "gbk", "latin-1"):
+            try:
+                return data.decode(enc), None
+            except UnicodeDecodeError:
+                continue
+        return data.decode("utf-8", errors="replace"), None
+    except Exception as e:
+        return None, "读取文件失败 (%s): %s" % (os.path.basename(path), e)
+
+
+def format_file_insertion(path, content):
+    fence = "```"
+    while fence in content:
+        fence += "`"
+    basename = os.path.basename(path)
+    ext = os.path.splitext(basename)[1].lstrip(".").lower()
+    lang = ext if ext in (
+        "py", "js", "ts", "json", "html", "css", "c", "cpp", "rs", "go",
+        "sh", "sql", "yaml", "yml", "xml", "md"
+    ) else ""
+    return "\n\n%s%s\n%s\n%s\n" % (fence, lang, content.strip(), fence)
+
+
+def expand_prompt_files(prompt):
+    matches = list(FILE_REF_PATTERN.finditer(prompt))
+    if not matches:
+        return prompt, None
+
+    result = prompt
+    for m in reversed(matches):
+        raw_path = m.group(1) or m.group(2) or m.group(3)
+        if not raw_path:
+            continue
+        resolved = resolve_file_path(raw_path)
+        if not resolved:
+            if looks_like_file_ref(raw_path):
+                return None, "未找到指定的文件: %s" % raw_path
+            continue
+        content, err = read_file_content(resolved)
+        if err:
+            return None, err
+        replacement = format_file_insertion(resolved, content)
+        start, end = m.span()
+        result = result[:start] + replacement + result[end:]
+
+    return result.strip(), None
+
+
+
+def label(site):
+    return SITE_LABEL.get(site) or DEFAULT_SITE
+
+
+def close_conn(conn):
+    try:
+        conn.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass
+    try:
+        conn.close()
+    except OSError:
+        pass
+
+
+def socket_path():
+    runtime = os.environ.get("XDG_RUNTIME_DIR")
+    base = runtime if runtime and os.path.isdir(runtime) else "/tmp"
+    return os.path.join(base, "omarchy-dsweb-%d.sock" % os.getuid())
+
+
+def fail(message, kind="bridge"):
+    sys.stderr.write(message + "\n")
+    print(json.dumps({"type": "error", "message": message, "kind": kind}))
+    return 1
+
+
+def request(payload, stream=False):
+    path = socket_path()
+    if not os.path.exists(path):
+        return None, "The Chrome bridge is not running (start Chrome, then retry)"
+    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    conn.settimeout(TIMEOUT)
+    try:
+        conn.connect(path)
+    except OSError:
+        conn.close()
+        return None, "The Chrome bridge is not responding (restart Chrome, then retry)"
+    try:
+        conn.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+    except OSError:
+        conn.close()
+        return None, "The Chrome bridge closed the connection"
+
+    outcome = {"error": None, "saw_done": False}
+    buf = b""
+    done = False
+    while not done:
+        try:
+            chunk = conn.recv(65536)
+        except socket.timeout:
+            close_conn(conn)
+            return outcome, "%s did not answer in time" % label(payload.get("site"))
+        if not chunk:
+            break
+        buf += chunk
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line.decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                continue
+            kind = event.get("type")
+            if kind == "error":
+                outcome["error"] = event.get("message") or "bridge error"
+            if kind == "done":
+                outcome["saw_done"] = True
+            if stream:
+                sys.stdout.write(json.dumps(event, separators=(",", ":")) + "\n")
+                sys.stdout.flush()
+            else:
+                outcome.setdefault("events", []).append(event)
+            # Every request ends with a terminal event, so the client stops on
+            # the event itself and never depends on the host hanging up.
+            if kind in TERMINAL:
+                done = True
+                break
+    close_conn(conn)
+    return outcome, None
+
+
+def parse_site(argv):
+    """Pull `-s/--site <id>` out of the argument list."""
+    site = DEFAULT_SITE
+    rest = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-s", "--site"):
+            if i + 1 >= len(argv):
+                return None, None
+            site = argv[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--site="):
+            site = arg.split("=", 1)[1]
+            i += 1
+            continue
+        rest.append(arg)
+        i += 1
+    if site not in SITE_LABEL:
+        return None, None
+    return site, rest
+
+
+def main(argv):
+    site, args = parse_site(argv[1:])
+    if site is None or not args:
+        sys.stderr.write(USAGE)
+        return 2
+    cmd = args[0]
+
+    if cmd == "status":
+        outcome, err = request({"cmd": "status"})
+        if err:
+            return fail(err)
+        for event in outcome.get("events", []):
+            print(json.dumps(event, separators=(",", ":")))
+        return 0
+
+    if cmd in ("probe", "selftest", "reload"):
+        outcome, err = request({"cmd": cmd, "site": site})
+        if err:
+            return fail(err)
+        for event in outcome.get("events", []):
+            if event.get("type") == "probe":
+                print(json.dumps(event.get("data"), indent=2, ensure_ascii=False))
+            elif event.get("type") == "status":
+                print(json.dumps(event, separators=(",", ":")))
+            elif event.get("type") == "error":
+                return fail(event.get("message") or cmd + " failed")
+        return 0
+
+    if cmd == "ask":
+        if len(args) < 2:
+            sys.stderr.write(USAGE)
+            return 2
+        prompt = " ".join(args[1:])
+        prompt, file_err = expand_prompt_files(prompt)
+        if file_err:
+            return fail(file_err, kind="file")
+        outcome, err = request({"cmd": "ask", "prompt": prompt, "site": site}, stream=True)
+        if err:
+            return fail(err)
+        if outcome["error"]:
+            sys.stderr.write(outcome["error"] + "\n")
+            return 1
+        if not outcome["saw_done"]:
+            sys.stderr.write("%s ended the run without finishing\n" % label(site))
+            return 1
+        return 0
+
+    sys.stderr.write("unknown command: %s\n" % cmd)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

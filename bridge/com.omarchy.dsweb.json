@@ -1,0 +1,9 @@
+{
+  "name": "com.omarchy.dsweb",
+  "description": "Omarchy DeepSeek Web bridge host",
+  "path": "/home/cuiyang/.local/bin/omarchy-dsweb-host",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://ofgecdhhcjemflbccnbohdomliblhdjc/"
+  ]
+}
