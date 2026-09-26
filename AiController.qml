@@ -63,7 +63,7 @@ Item {
       if (ai.aiAgents.indexOf(all[i].id) >= 0) out.push({ id: all[i].id, label: all[i].label, icon: "󰚩" })
     return out
   }
-  readonly property int aiLineHeight: Math.round(ai.menu.scaledFont(Style.font.body) * 1.45)
+  readonly property int aiLineHeight: Math.round(Math.max(18, ai.menu.scaledFont(18)) * 1.45)
 
   onIsAiModeChanged: {
     if (ai.isAiMode) ai.probeAiAgents()
