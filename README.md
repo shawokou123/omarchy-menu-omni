@@ -63,7 +63,7 @@ ai 解释这段代码 @main.py
 
 在终端中执行 Omarchy 插件添加命令：
 ```bash
-omarchy plugin add https://github.com/cuiyang/omarchy-menu-omni.git --enable --yes
+omarchy plugin add https://github.com/shawokou123/omarchy-menu-omni.git --enable --yes
 ```
 *(注：如果需要手动安装，直接克隆本仓库至 `~/.config/omarchy/plugins/omarchy-menu-omni` 即可)*
 
