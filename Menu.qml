@@ -2265,14 +2265,18 @@ Item {
 
       MouseArea { anchors.fill: parent; onClicked: {} }
 
+      // Delete confirmation and the menu's key handler. The focus and the
+      // handler itself belong to the invisible TextInput in the search row,
+      // also named keyCatcher: an input method can only commit composed text
+      // to a real Qt text input, and this item is not one.
       Item {
-        id: keyCatcher
+        id: keyScope
         anchors.fill: parent
         z: root.deleteConfirmOpen ? 20 : 0
-        focus: true
 
-        Keys.priority: Keys.BeforeItem
-        Keys.onPressed: function(event) {
+        // Called from keyCatcher.Keys.onPressed, which runs ahead of the
+        // TextInput's own editing. Everything below is unchanged.
+        function handleKey(event) {
           if (root.deleteConfirmOpen) {
             if (deleteConfirm.handleKey(event)) event.accepted = true
             return
@@ -2558,6 +2562,50 @@ Item {
             font.family: root.fontFamily
             font.pixelSize: root.scaledFont(Style.font.heading)
             elide: Text.ElideRight
+          }
+
+          // The menu draws its own field, but the focus belongs to this real
+          // TextInput: an input method needs a Qt text input to commit
+          // composed text to, and without one only single ASCII keystrokes
+          // ever arrive. It stays invisible -- the field, the placeholder and
+          // the cursor above are still what shows -- and hands every key it
+          // sees to keyScope.handleKey first, so the menu's own key handling
+          // is unchanged. Only an input method commit gets past that, and
+          // lands here as text.
+          //
+          // Its geometry tracks the caret: an input method places its
+          // candidate window from cursorRectangle, and that window belongs at
+          // the end of the query, not at the card's corner.
+          TextInput {
+            id: keyCatcher
+            focus: true
+            anchors.left: searchText.left
+            anchors.leftMargin: root.filterText ? Math.min(searchText.contentWidth, searchText.width) : 0
+            anchors.verticalCenter: searchText.verticalCenter
+            width: Math.max(8, Math.round(searchText.font.pixelSize * 0.55))
+            height: Math.max(8, searchText.height)
+            color: "transparent"
+            cursorVisible: false
+            selectionColor: "transparent"
+            selectedTextColor: "transparent"
+            clip: true
+
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) { keyScope.handleKey(event) }
+
+            // Composed text from the input method. Plain typing never reaches
+            // here: handleKey accepts it first and appends it itself.
+            property bool committing: false
+            onTextChanged: {
+              if (committing) return
+              var committed = text
+              if (committed.length === 0) return
+              committing = true
+              text = ""
+              committing = false
+              if (root.deleteConfirmOpen) return
+              root.setFilter(root.filterText + MenuModel.sanitizeText(committed, 512))
+            }
           }
 
         }
