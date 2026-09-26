@@ -323,12 +323,19 @@ var agyAdapter = {
   id: "agy",
   label: "Antigravity",
   binary: "agy",
-  // agy has no switch that takes its MCP servers and plugins away for one
-  // run (--mode plan --sandbox limits edits and the terminal, not MCP), so it
-  // is not started headless from here, like opencode. The adapter stays so
-  // it can come back once agy gains such a switch.
-  disabledReason: "Antigravity is disabled for AI search: its headless run cannot be kept away from MCP servers and plugins. " +
-    "Use claude, codex or pi (set \"agent\" in ~/.local/state/omarchy-menu-omni/ai.json).",
+  // LOCAL MODIFICATION (this machine only, not upstream). Upstream disables
+  // agy for headless runs because a single invocation cannot be kept away
+  // from agy's MCP servers and plugins (--mode plan --sandbox limits edits
+  // and the terminal, not MCP), so this field normally reads:
+  //
+  //   disabledReason: "Antigravity is disabled for AI search: its headless
+  //   run cannot be kept away from MCP servers and plugins. Use claude, codex
+  //   or pi (set \"agent\" in ~/.local/state/omarchy-menu-omni/ai.json).",
+  //
+  // Removing it is safe here because `agy mcp list` and `agy plugin list` are
+  // both empty on this machine: the headless run has nothing to reach for.
+  // If MCP servers or plugins are ever added to agy, restore the field above.
+  // `omarchy plugin update` overwrites this file and brings the gate back.
   capabilities: {
     continuity: "caller-id",
     modelOverride: true,
@@ -663,12 +670,128 @@ var piAdapter = {
   }
 }
 
+// Local addition (omarchy-menu-omni): the web bridge. The answer comes from a
+// chat tab that is already open inside the user's own Chrome, reached through
+// a native messaging bridge (extension in ~/.local/share/omarchy-dsweb, host
+// and client in ~/.local/bin). Asking from the launcher therefore costs no API
+// tokens. The launcher still renders the answer itself: the `dsweb` client
+// streams one JSON event per line over a unix socket, and the host diffs the
+// page's full-text snapshots into the deltas this adapter forwards.
+//
+// Three things are deliberately not offered: a model override (each site has
+// its own model picker), a web-search toggle (the page's own switch is used,
+// never touched), and a terminal handoff (there is no CLI session to resume —
+// the conversation stays in the browser tab).
+//
+// One adapter per site; the shape is identical, only the site id and the
+// wording differ.
+function webBridgeAdapter(spec) {
+  return {
+    id: spec.id,
+    label: spec.label,
+    binary: "dsweb",
+    capabilities: {
+      // No session id exists to hand to anything: every launcher question
+      // continues the same web conversation, and the terminal continuation is
+      // a status read-out rather than a resumed run.
+      continuity: "none",
+      modelOverride: false,
+      webSearchDetection: false,
+      resumeBeforeExit: false
+    },
+
+    createSessionRef: function() { return null },
+
+    // The prompt is one argv element, passed to Quickshell's Process.command as
+    // a literal: it is never assembled into a shell string, and the client
+    // forwards it verbatim to the host over the socket. The site is named
+    // explicitly so the bridge never has to guess which tab to drive.
+    buildRun: function(prompt) {
+      return ["dsweb", "-s", spec.site, "ask", prompt]
+    },
+
+    // Nothing to resume in a terminal. `dsweb status` is the honest answer
+    // here: it reports whether the Chrome bridge is up instead of opening a
+    // session that cannot exist.
+    buildResume: function() {
+      return ["dsweb", "status"]
+    },
+
+    // Exactly the lines the client writes (see the module docstring in
+    // ~/.local/bin/dsweb; the two change together):
+    //   {"type":"activity","activity":"thinking"}
+    //   {"type":"text","text":"..."}   delta, appended in order
+    //   {"type":"done"}                end of answer, nothing to show
+    //   {"type":"error","message":"...","kind":"..."}
+    parseLine: function(line, ps) {
+      var obj = safeParse(line)
+      if (obj === undefined || obj === null || typeof obj !== "object") return []
+      var events = []
+      if (obj.type === "text") {
+        if (typeof obj.text === "string" && obj.text.length > 0) events.push({ type: "text", text: obj.text })
+        return events
+      }
+      if (obj.type === "activity") {
+        events.push({ type: "activity", activity: obj.activity === "searching" ? "searching" : "thinking" })
+        return events
+      }
+      if (obj.type === "error") {
+        events.push({ type: "error", message: webMessage(obj, spec.target) })
+        return events
+      }
+      // "done", "status" and "probe" carry no answer text: the process exit
+      // code is what tells AiBackend the run is over.
+      return events
+    },
+
+    classifyFailure: function(exitCode, stderrText) {
+      var text = String(stderrText || "")
+      // The host's own failures reach stderr before any JSON event does, and
+      // they name the fix better than a generic message can.
+      if (/bridge is not running|not responding|restart Chrome/i.test(text)) {
+        return { message: "The Chrome bridge is not running (start Chrome, then ask again)", kind: "bridge" }
+      }
+      if (/sign(ed)? in/i.test(text)) {
+        return { message: "Sign in to " + spec.target + " in the Chrome tab, then ask again", kind: "auth" }
+      }
+      return classifyGeneric(stderrText)
+    }
+  }
+}
+
+// A short, actionable message per failure kind: the panel shows this text on
+// its own, without the surrounding context a terminal would give.
+var WEB_ERRORS = {
+  auth: "Sign in to %T in the Chrome tab, then ask again",
+  "no-composer": "Could not reach the %T chat box (reload that Chrome tab)",
+  "no-content": "Could not reach the %T chat box (reload that Chrome tab)",
+  challenge: "%T is showing a Cloudflare check (open that tab, pass it, then retry)",
+  submit: "The %T page did not accept the question",
+  "no-answer": "The %T page ended the turn without any answer text",
+  timeout: "%T did not answer in time",
+  bridge: "The Chrome bridge is not running (start Chrome, then ask again)",
+  busy: "Another question is still running",
+  cancel: "Question cancelled"
+}
+
+function webMessage(obj, target) {
+  var kind = typeof obj.kind === "string" ? obj.kind : ""
+  if (WEB_ERRORS[kind] !== undefined) return WEB_ERRORS[kind].replace("%T", target)
+  var message = typeof obj.message === "string" ? obj.message : ""
+  return message.length > 0 ? message : target + " bridge error"
+}
+
+var dswebAdapter = webBridgeAdapter({ id: "dsweb", label: "DeepSeek Web", site: "dsweb", target: "DeepSeek" })
+var gptwebAdapter = webBridgeAdapter({ id: "gptweb", label: "ChatGPT Web", site: "gptweb", target: "ChatGPT" })
+
 var ADAPTERS = {
   claude: claudeAdapter,
   codex: codexAdapter,
   agy: agyAdapter,
   opencode: opencodeAdapter,
-  pi: piAdapter
+  pi: piAdapter,
+  dsweb: dswebAdapter,
+  gptweb: gptwebAdapter
 }
 
 // The model a terminal continuation should pin: only one the user chose
