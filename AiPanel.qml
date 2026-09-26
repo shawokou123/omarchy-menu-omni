@@ -94,7 +94,7 @@ Item {
                 && (!panel.ai.aiSession.displayedText || panel.ai.aiSession.displayedText.length === 0))
           ? Color.urgent : panel.menu.foreground
         font.family: panel.menu.fontFamily
-        font.pixelSize: Math.max(18, panel.menu.scaledFont(18))
+        font.pixelSize: Math.max(22, panel.menu.scaledFont(22))
         lineHeight: 1.45
       }
     }
