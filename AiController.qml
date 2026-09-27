@@ -56,6 +56,7 @@ Item {
   // configured agent is not always the one with usage left.
   property var aiAgents: []
   property string aiAgent: ""
+  property var aiTurns: []
   readonly property var aiAgentTabs: {
     var out = []
     var all = AiBackend.selectableAgents()
@@ -66,6 +67,7 @@ Item {
   readonly property int aiLineHeight: Math.round(Math.max(22, ai.menu.scaledFont(22)) * 1.45)
 
   onIsAiModeChanged: {
+    ai.aiTurns = []
     if (ai.isAiMode) ai.probeAiAgents()
     if (ai.isAiMode) {
       ai.aiSession = AiBackend.snapshot()
@@ -144,6 +146,7 @@ Item {
     if (!AiBackend.setAgent(id)) return
     ai.aiAgent = id
     if (changed) {
+      ai.aiTurns = []
       ai.aiCancel()
       ai.aiHandoffError = ""
       ai.aiBinaryChecked = false
@@ -244,12 +247,42 @@ Item {
     AiBackend.cancel()
   }
 
+  function aiIsBusy() {
+    var s = ai.aiSession
+    if (!s) return false
+    return s.state === "starting" || s.state === "running" || s.state === "draining"
+  }
+
   function aiSubmit() {
     if (!ai.isAiMode || ai.aiBinaryMissing) return
     var prompt = ai.aiPromptText.trim()
     if (prompt.length === 0) return
+    ai.aiTurns = []
     ai.aiCancel()
     var result = AiBackend.beginGeneration(prompt)
+    ai.aiSession = AiBackend.snapshot()
+    ai.aiHandoffError = ""
+    if (!result.argv) return
+    ai.aiDispatchOrQueue(result.generation, result.argv)
+  }
+
+  function aiSubmitFollowUp(followUpPrompt) {
+    if (!ai.isAiMode || ai.aiBinaryMissing) return
+    var text = String(followUpPrompt || "").trim()
+    if (text.length === 0) return
+    if (ai.aiIsBusy()) return
+
+    var s = ai.aiSession
+    if (s && (s.displayedText || s.rawText)) {
+      var prevPrompt = s.prompt || ai.aiPromptText.trim()
+      var prevAnswer = s.rawText || s.displayedText
+      var turns = ai.aiTurns.slice()
+      turns.push({ prompt: prevPrompt, answer: prevAnswer })
+      ai.aiTurns = turns
+    }
+
+    ai.aiCancel(false)
+    var result = AiBackend.beginGeneration(text)
     ai.aiSession = AiBackend.snapshot()
     ai.aiHandoffError = ""
     if (!result.argv) return
@@ -271,9 +304,63 @@ Item {
     if (snap) ai.aiSession = snap
   }
 
+  function aiFullConversationText() {
+    var s = ai.aiSession
+    var currentAnswer = ""
+    if (s) {
+      if (s.state !== "error") {
+        currentAnswer = ai.aiRenderable(s.displayedText || "")
+      } else {
+        var msg = ai.aiRenderable(s.errorMessage || "")
+        currentAnswer = (s.displayedText && s.displayedText.length > 0)
+          ? ai.aiRenderable(s.displayedText) + "\n\n⚠ " + msg
+          : msg
+      }
+    }
+
+    if (ai.aiTurns.length === 0) {
+      return currentAnswer
+    }
+
+    var parts = []
+    for (var i = 0; i < ai.aiTurns.length; i++) {
+      var turn = ai.aiTurns[i]
+      parts.push("**问**：" + ai.aiRenderable(turn.prompt) + "\n\n" + ai.aiRenderable(turn.answer))
+    }
+
+    var currentPrompt = s ? (s.prompt || "") : ""
+    if (currentPrompt || currentAnswer) {
+      var currentPart = "**问**：" + ai.aiRenderable(currentPrompt)
+      if (currentAnswer) {
+        currentPart += "\n\n" + currentAnswer
+      }
+      parts.push(currentPart)
+    }
+
+    return parts.join("\n\n---\n\n")
+  }
+
+  function aiFullRawText() {
+    if (ai.aiTurns.length === 0) {
+      return ai.aiSession ? (ai.aiSession.rawText || "") : ""
+    }
+    var parts = []
+    for (var i = 0; i < ai.aiTurns.length; i++) {
+      parts.push("问：" + ai.aiTurns[i].prompt + "\n\n" + ai.aiTurns[i].answer)
+    }
+    var s = ai.aiSession
+    var currentPrompt = s ? (s.prompt || "") : ""
+    var currentAnswer = s ? (s.rawText || s.displayedText || "") : ""
+    if (currentPrompt || currentAnswer) {
+      parts.push("问：" + currentPrompt + "\n\n" + currentAnswer)
+    }
+    return parts.join("\n\n---\n\n")
+  }
+
   function aiCopyAnswer() {
-    if (!ai.aiSession || ai.aiSession.state === "idle" || !ai.aiSession.rawText) return
-    ai.menu.copyText(ai.aiSession.rawText)
+    var text = ai.aiFullRawText()
+    if (!text) return
+    ai.menu.copyText(text)
   }
 
   function aiPromptChangedSinceSubmit() {
@@ -342,7 +429,7 @@ Item {
     var hint
     if (state === "ready") {
       if (ai.aiCanReask()) hint = "Enter ask new question · Esc close"
-      else hint = (s && s.canHandoff) ? "↵ continue in terminal · Ctrl+C copy · Esc close" : "Ctrl+C copy · Esc close"
+      else hint = (s && s.canHandoff) ? "↵ continue in terminal · ↓ follow up · Ctrl+C copy · Esc close" : "↓ follow up · Ctrl+C copy · Esc close"
     } else if (state === "handoff") {
       hint = "Opening terminal…"
     } else if (state === "error") {

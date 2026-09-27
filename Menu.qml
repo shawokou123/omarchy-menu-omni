@@ -944,6 +944,10 @@ Item {
     Qt.callLater(function() { if (displayModel.count > 0) root.revealCursor() })
   }
 
+  function focusSearch() {
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+
   // Arrow keys in the grid: sideways by one tile, up and down by a row.
   // Unlike the list it does not wrap -- off the edge of a grid is nowhere.
   function gridMove(delta) {
@@ -2330,9 +2334,14 @@ Item {
             event.accepted = true
           } else if (aiCtl.isAiMode && (event.key === Qt.Key_Up || event.key === Qt.Key_Down
                      || event.key === Qt.Key_PageUp || event.key === Qt.Key_PageDown)) {
+            var maxY = Math.max(0, aiPanel.answerFlick.contentHeight - aiPanel.answerFlick.height)
+            if (event.key === Qt.Key_Down && aiPanel.canFocusFollowUp && (aiPanel.answerFlick.pinnedToBottom || maxY <= 0)) {
+              aiPanel.focusFollowUp()
+              event.accepted = true
+              return
+            }
             var step = (event.key === Qt.Key_PageUp || event.key === Qt.Key_PageDown)
               ? aiPanel.answerFlick.height : aiCtl.aiLineHeight * 2
-            var maxY = Math.max(0, aiPanel.answerFlick.contentHeight - aiPanel.answerFlick.height)
             var down = event.key === Qt.Key_Down || event.key === Qt.Key_PageDown
             aiPanel.answerFlick.contentY = down ? Math.min(maxY, aiPanel.answerFlick.contentY + step)
                                           : Math.max(0, aiPanel.answerFlick.contentY - step)

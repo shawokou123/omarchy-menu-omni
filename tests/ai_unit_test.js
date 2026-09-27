@@ -1381,6 +1381,89 @@ for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb",
   AiBackend.loadConfig(null, "")
 }
 
+// ------------------------------------------------ Multi-turn dialogue (2.3) ----
+{
+  function aiRenderable(text) {
+    return String(text || "").replace(/!\[/g, "[").replace(/</g, "\\<")
+  }
+
+  function aiFullConversationText(turns, session) {
+    var s = session
+    var currentAnswer = ""
+    if (s) {
+      if (s.state !== "error") {
+        currentAnswer = aiRenderable(s.displayedText || "")
+      } else {
+        var msg = aiRenderable(s.errorMessage || "")
+        currentAnswer = (s.displayedText && s.displayedText.length > 0)
+          ? aiRenderable(s.displayedText) + "\n\n⚠ " + msg
+          : msg
+      }
+    }
+
+    if (turns.length === 0) {
+      return currentAnswer
+    }
+
+    var parts = []
+    for (var i = 0; i < turns.length; i++) {
+      var turn = turns[i]
+      parts.push("**问**：" + aiRenderable(turn.prompt) + "\n\n" + aiRenderable(turn.answer))
+    }
+
+    var currentPrompt = s ? (s.prompt || "") : ""
+    if (currentPrompt || currentAnswer) {
+      var currentPart = "**问**：" + aiRenderable(currentPrompt)
+      if (currentAnswer) {
+        currentPart += "\n\n" + currentAnswer
+      }
+      parts.push(currentPart)
+    }
+
+    return parts.join("\n\n---\n\n")
+  }
+
+  function aiFullRawText(turns, session) {
+    if (turns.length === 0) {
+      return session ? (session.rawText || "") : ""
+    }
+    var parts = []
+    for (var i = 0; i < turns.length; i++) {
+      parts.push("问：" + turns[i].prompt + "\n\n" + turns[i].answer)
+    }
+    var s = session
+    var currentPrompt = s ? (s.prompt || "") : ""
+    var currentAnswer = s ? (s.rawText || s.displayedText || "") : ""
+    if (currentPrompt || currentAnswer) {
+      parts.push("问：" + currentPrompt + "\n\n" + currentAnswer)
+    }
+    return parts.join("\n\n---\n\n")
+  }
+
+  // Turn 0: single turn formatting without prefix
+  eq(aiFullConversationText([], { state: "ready", displayedText: "Paris is the capital of France" }),
+     "Paris is the capital of France", "single turn renders raw answer without prefixes")
+
+  // Turn 1 added: multi-turn rendering with bold prompt prefixes and divider
+  const turns = [{ prompt: "What is capital of France?", answer: "Paris" }]
+  const session2 = { state: "running", prompt: "Population?", displayedText: "About 2.1 million" }
+  eq(aiFullConversationText(turns, session2),
+     "**问**：What is capital of France?\n\nParis\n\n---\n\n**问**：Population?\n\nAbout 2.1 million",
+     "multi-turn renders past turns and active turn separated by ---")
+
+  eq(aiFullRawText(turns, session2),
+     "问：What is capital of France?\n\nParis\n\n---\n\n问：Population?\n\nAbout 2.1 million",
+     "multi-turn raw text produces clean copyable conversation")
+
+  // Grok web adapter preserves prompt in argv
+  AiBackend.loadConfig(JSON.stringify({ agent: "grokweb" }), "")
+  AiBackend.cancel()
+  let g = AiBackend.beginGeneration("What is the meaning of life?")
+  eq(g.argv.slice(-5), ["dsweb", "-s", "grokweb", "ask", "What is the meaning of life?"], "grokweb builds ask argv with site grokweb")
+  AiBackend.cancel()
+  AiBackend.loadConfig(null, "")
+}
+
 // ------------------------------------------------------------- summary ----
 
 console.log("")
