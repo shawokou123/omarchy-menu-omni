@@ -43,6 +43,10 @@
       '[aria-label*="停止" i]',
     ],
     answer: [
+      'div:has(> * > * > * > * > * > * > button[aria-label*="复制" i])',
+      'div:has(> * > * > * > * > * > * > button[aria-label*="Copy" i])',
+      'div:has(> * > * > * > * > * > button[aria-label*="复制" i])',
+      'div:has(> * > * > * > * > * > button[aria-label*="Copy" i])',
       '[data-testid="grokResponse"]',
       'div[data-testid="grok-response"]',
       '[data-testid="message-bubble"]',
@@ -52,7 +56,6 @@
       'article[data-testid^="conversation-turn"]',
       '.markdown',
       'div.prose',
-      '[data-testid="cellInnerDiv"] div[dir="auto"]',
     ],
     skip: [
       "[data-message-attribution]",
@@ -352,13 +355,14 @@
   function turnFinished(node) {
     if (!node) return false
     if (isStreaming(node)) return false
+    if (stopButton()) return false
 
-    const container = node.closest ? (node.closest('[data-testid="grokResponse"]') || node.closest('[data-testid="cellInnerDiv"]') || node.parentElement) : node
-    if (container) {
-      const actionBtn = container.querySelector(
-        'button[data-testid="copy"], button[data-testid="like"], button[data-testid="dislike"], button[data-testid="share"], [aria-label*="Copy" i], [aria-label*="Share" i]'
+    for (let p = node; p && p !== document.body; p = p.parentElement) {
+      const btn = p.querySelector(
+        'button[aria-label*="复制" i], button[aria-label*="Copy" i], button[aria-label*="分享" i], button[aria-label*="Share" i], button[aria-label*="重新生成" i], button[aria-label*="Regenerate" i], button[data-testid="copy"]'
       )
-      if (actionBtn && visible(actionBtn)) return true
+      if (btn && visible(btn)) return true
+      if (p.children && p.children.length > 8) break
     }
     return false
   }
@@ -478,18 +482,17 @@
       const text = node ? toMarkdown(node, true).slice(0, MAX_TEXT) : ""
 
       if (!a.sawNew) {
-        const isNewNode = a.beforeNode
-          ? (node && node !== a.beforeNode && (!a.beforeId || nodeId !== a.beforeId))
-          : !!node
+        const isNewNode = a.beforeNode ? (node && node !== a.beforeNode) : !!node
         const countGrew = answerNodes().length > a.beforeCount
         const textDiffers = node && text && a.beforeText && text !== a.beforeText && !a.beforeText.startsWith(text)
+        const isGenerating = !!stopButton() || isStreaming(node)
 
-        if (countGrew || (isNewNode && nodeId && nodeId !== a.beforeId) || textDiffers) {
+        if (countGrew || isNewNode || textDiffers || isGenerating) {
           a.sawNew = true
         }
       }
 
-      if (!a.sawNew || (text && a.beforeText && text === a.beforeText)) {
+      if (!a.sawNew) {
         if (Date.now() - a.started > HARD_LIMIT_MS) {
           finish(id, false, "Grok did not start its answer in time", "timeout")
         }
@@ -499,7 +502,7 @@
       const stop = stopButton()
       const streaming = isStreaming(node)
       const turnDone = turnFinished(node)
-      const done = !stop && !streaming && turnDone
+      const done = !stop && !streaming
 
       if (text.indexOf(a.last) === 0 && text !== a.last) {
         a.last = text
@@ -513,11 +516,11 @@
 
       a.doneStreak = done ? (a.doneStreak || 0) + 1 : 0
 
-      const minStable = turnDone ? 2000 : 4000
-      const minStreak = turnDone ? 4 : 8
+      const minStable = turnDone ? 1500 : 3000
+      const minStreak = turnDone ? 3 : 6
       const settled = Date.now() - a.lastChange > minStable
 
-      if (a.sawNew && !streaming && a.doneStreak >= minStreak && settled) {
+      if (a.sawNew && !streaming && ((turnDone && settled) || (a.doneStreak >= minStreak && settled))) {
         const full = node ? toMarkdown(node, false).slice(0, MAX_TEXT) : ""
         if (full && full !== a.last) {
           a.last = full
@@ -608,6 +611,8 @@
       lastAnswer: describe(last),
       lastAnswerText: last ? toMarkdown(last).slice(0, 600) : "",
       lastAnswerHtml: last ? last.outerHTML.slice(0, 4000) : "",
+      testStreaming: isStreaming(last),
+      testTurnDone: turnFinished(last),
       viewport: [window.innerWidth, window.innerHeight],
     }
     post({ op: "probe-result", id, data })

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Omarchy Web bridge",
-  "version": "1.43",
+  "version": "1.44",
   "description": "Answers launcher questions inside the user's own chat tabs (DeepSeek, ChatGPT). Driven only by a local native messaging host.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsDSgHARzHFk4eEoPtG4I1KpYTdXW+hMvnRwu9QyhYkLr0NzXC19N1Sxzt6xKfNGUN1KXA0h/4G2WRsr43EhodG1H3A0EBVjT0dSXSFFBF9bXualzN9bEdw5jSAkbKvMrwYRCBYP5bLBmNNCxrCXpWiEmws2sOBqQFDgKJBVXMt1MhR1dLfTfR4SlNE1paXDa119V6wNjUmAmSn7Vm/D/6TIztT547GywXYQfKmbGd9B8ezLacdNrE/WbfMQT2OEiDKqIGxNbFIceRnNkPou9vTTQCX3z3l/YJAHXsZQALBjwEQt31ewQaA077XEFlOhMk+x3LCZiW6ZShynTFCcxDwIDAQAB",
   "permissions": [
