@@ -13,7 +13,7 @@
 // Local addition: "dsweb" (DeepSeek Web) is answered by the signed-in
 // chat.deepseek.com tab in the user's own Chrome through a native messaging
 // bridge, so it costs no API tokens.
-var SUPPORTED_AGENTS = ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb"]
+var SUPPORTED_AGENTS = ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb", "grokweb"]
 
 // The streaming "typewriter" reveal (see ai/AiBackend.js's tick()) is an
 // exponential RAMP over time — the rate never depends on how much text is

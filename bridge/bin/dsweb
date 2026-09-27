@@ -26,11 +26,11 @@ import sys
 
 TIMEOUT = 330.0
 TERMINAL = ("status", "probe", "done", "error")
-SITE_LABEL = {"dsweb": "DeepSeek", "gptweb": "ChatGPT"}
+SITE_LABEL = {"dsweb": "DeepSeek", "gptweb": "ChatGPT", "grokweb": "Grok"}
 DEFAULT_SITE = "dsweb"
 MAX_FILE_BYTES = 500_000
 
-USAGE = "usage: dsweb [-s dsweb|gptweb] ask <prompt> | probe | selftest | status\n"
+USAGE = "usage: dsweb [-s dsweb|gptweb|grokweb] ask <prompt> | probe | selftest | status\n"
 
 FILE_REF_PATTERN = re.compile(
     r"""(?:^|(?<=[\s，。！？；;：:（）\(\)\[\]\{\}\<\>]))@(?:"([^"\n\r]+)"|\'([^\'\n\r]+)\'|([^\s，。！？；;：:（）\(\)\[\]\{\}\<\>"\']+))"""

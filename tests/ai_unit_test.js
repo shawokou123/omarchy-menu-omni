@@ -151,7 +151,7 @@ function drainToReady(maxTicks) {
 
 // argv safety: prompt must always be a single literal argv element, never
 // concatenated into another string, for every adapter.
-for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb"]) {
+for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb", "grokweb"]) {
   const adapter = AiAdapters.get(id)
   assert(adapter !== null, "adapter registered: " + id)
   const nasty = "\"'; $(echo hi) `uname` | ; \n中文 🚀"
@@ -371,7 +371,8 @@ for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb"]
   // adapters share one shape, so they are asserted together.
   const webAgents = [
     { id: "dsweb", label: "DeepSeek Web", target: "DeepSeek" },
-    { id: "gptweb", label: "ChatGPT Web", target: "ChatGPT" }
+    { id: "gptweb", label: "ChatGPT Web", target: "ChatGPT" },
+    { id: "grokweb", label: "Grok Web", target: "Grok" }
   ]
   for (const spec of webAgents) {
     const adapter = AiAdapters.get(spec.id)
@@ -436,7 +437,7 @@ for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb"]
 
 {
   // Malformed JSON / unknown event types must never throw for any adapter.
-  for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb"]) {
+  for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb", "grokweb"]) {
     const adapter = AiAdapters.get(id)
     let threw = false
     try {
@@ -1232,7 +1233,7 @@ for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb"]
   // be kept away from its MCP servers and plugins. Restore both the field in
   // ai/AiAdapters.js and the upstream assertions when that matters again.
   assert(!AiAdapters.get("agy").disabledReason, "agy is offered for headless runs (local modification)")
-  eq(AiBackend.selectableAgents().map((a) => a.id), ["claude", "codex", "agy", "pi", "dsweb", "gptweb"], "claude, codex, agy, pi, dsweb and gptweb are offered")
+  eq(AiBackend.selectableAgents().map((a) => a.id), ["claude", "codex", "agy", "pi", "dsweb", "gptweb", "grokweb"], "claude, codex, agy, pi, dsweb, gptweb and grokweb are offered")
   AiBackend.loadConfig(JSON.stringify({ agent: "opencode" }), "")
   const g = AiBackend.beginGeneration("q")
   eq(g.argv, null, "a disabled adapter never produces an argv to spawn")

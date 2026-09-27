@@ -30,7 +30,7 @@ STATUS_STALE = 90.0
 
 # Site ids the extension knows. The host never touches a page itself: it only
 # tags each request so the service worker can pick the right tab and script.
-SITE_LABEL = {"dsweb": "DeepSeek", "gptweb": "ChatGPT"}
+SITE_LABEL = {"dsweb": "DeepSeek", "gptweb": "ChatGPT", "grokweb": "Grok"}
 DEFAULT_SITE = "dsweb"
 
 

@@ -22,6 +22,12 @@ const SITES = {
     home: "https://chatgpt.com/",
     file: "gpt.js",
   },
+  grokweb: {
+    label: "Grok",
+    match: ["https://x.com/i/grok*", "https://twitter.com/i/grok*", "https://grok.com/*"],
+    home: "https://x.com/i/grok",
+    file: "grok.js",
+  },
 }
 
 function siteOf(msg) {

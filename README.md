@@ -30,7 +30,7 @@
 ### 2. 独家 AI 模式：Chrome 网页端零 Token 费用桥接
 普通启动器调用大模型通常需要昂贵且繁琐的 API Key。**Omni 提供首创的 Chrome 网页端本地原生桥接**：
 - **免 API 费用**：直接复用您在 Chrome 中已登录的网页会话，提问完全不消耗 API Token。
-- **双引擎支持**：支持 **DeepSeek Web** (`chat.deepseek.com`) 与 **ChatGPT Web** (`chatgpt.com`)。
+- **三大网页引擎支持**：支持 **DeepSeek Web** (`chat.deepseek.com`)、**ChatGPT Web** (`chatgpt.com`) 与 **Grok Web** (`x.com/i/grok` / `grok.com`)。
 - **无缝流式输出**：采用打字机式平滑加速度渲染算法，拒绝突然爆屏卡顿；完美解析 Markdown 语法与代码块（带语法高亮与代码复制）。
 - **多模型自由切换**：在 AI 模式下直接使用 `Tab` 或 `Ctrl + 数字` 在不同 AI 引擎之间无感切换。
 - **兼容本地 CLI Agent**：除网页端桥接外，原生兼容 Claude、Codex、Agy、OpenCode、Pi 等命令行 Agent。
@@ -107,7 +107,7 @@ bash bridge/install.sh
 ### AI 对话模式
 - 启动：输入 `ai <您的问题>` 或在输入 `/` 后选择 `ai`。
 - 引用文件：输入 `ai 帮我翻译 @<文件路径>`。
-- 切换模型：按 `Tab` 键即可在 DeepSeek Web、ChatGPT Web 及已安装的本地 CLI Agent 之间切换。
+- 切换模型：按 `Tab` 键即可在 DeepSeek Web、ChatGPT Web、Grok Web 及已安装的本地 CLI Agent 之间切换。
 - 复制结果：点击卡片或按对应快捷键一键复制 AI 回答全文。
 
 ---
@@ -119,13 +119,16 @@ bash bridge/install.sh
 # 查看桥接服务与 Chrome 连接状态
 dsweb status
 
-# 探测当前打开的 ChatGPT 标签页状态
+# 探测当前打开的 Grok / ChatGPT 标签页状态
+dsweb -s grokweb probe
 dsweb -s gptweb probe
 
-# 测试 ChatGPT 自动化输入与清空功能（不消耗真实对话）
+# 测试 Grok / ChatGPT 自动化输入与清空功能（不消耗真实对话）
+dsweb -s grokweb selftest
 dsweb -s gptweb selftest
 
 # 命令行单独测试提问
+dsweb -s grokweb ask "用一句话介绍你自己"
 dsweb -s dsweb ask "用一句话解释量子力学"
 ```
 

@@ -783,6 +783,7 @@ function webMessage(obj, target) {
 
 var dswebAdapter = webBridgeAdapter({ id: "dsweb", label: "DeepSeek Web", site: "dsweb", target: "DeepSeek" })
 var gptwebAdapter = webBridgeAdapter({ id: "gptweb", label: "ChatGPT Web", site: "gptweb", target: "ChatGPT" })
+var grokwebAdapter = webBridgeAdapter({ id: "grokweb", label: "Grok Web", site: "grokweb", target: "Grok" })
 
 var ADAPTERS = {
   claude: claudeAdapter,
@@ -791,7 +792,8 @@ var ADAPTERS = {
   opencode: opencodeAdapter,
   pi: piAdapter,
   dsweb: dswebAdapter,
-  gptweb: gptwebAdapter
+  gptweb: gptwebAdapter,
+  grokweb: grokwebAdapter
 }
 
 // The model a terminal continuation should pin: only one the user chose

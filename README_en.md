@@ -240,6 +240,7 @@ Install and authenticate the chosen CLI separately.
 | Pi | No tools, extensions or skills |
 | DeepSeek Web (dsweb) | No CLI: the question is typed into the signed-in `chat.deepseek.com` tab in your own Chrome, through a local native messaging bridge, and the answer is streamed back from that page. It continues the conversation already open in that tab, and leaves the page's own Deep Think / Search switches exactly as they are. Needs Chrome running and signed in. The tab is brought to the front first: a chat page in a background tab keeps its message list out of the layout, and nothing can be read from it until it is visible. `dsweb status` reports the bridge state, `dsweb probe` dumps the page's DOM facts, `dsweb reload` reloads the tab the bridge is driving |
 | ChatGPT Web (gptweb) | Same bridge, `chatgpt.com` tab instead. Works signed in or as a guest, but that site sits behind Cloudflare bot management: if a challenge is showing in the tab, the panel says so and the check has to be passed by hand once. The page's own model picker is used as-is |
+| Grok Web (grokweb) | Same bridge, `x.com/i/grok` or `grok.com` tab instead. Automatically interacts with Elon Musk's Grok AI without API tokens, streaming responses directly to the launcher |
 | Antigravity (agy) | Disabled: its headless run cannot be kept away from its MCP servers and plugins |
 | OpenCode | Disabled: tool removal cannot be enforced by this adapter |
 
