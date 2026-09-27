@@ -304,12 +304,21 @@ Item {
     if (snap) ai.aiSession = snap
   }
 
+  function aiClearHistory() {
+    ai.aiTurns = []
+    ai.aiCancel(false)
+    ai.aiSession = AiBackend.snapshot()
+  }
+
   function aiFullConversationText() {
     var s = ai.aiSession
     var currentAnswer = ""
     if (s) {
       if (s.state !== "error") {
         currentAnswer = ai.aiRenderable(s.displayedText || "")
+        if (!currentAnswer && (s.state === "starting" || s.state === "running")) {
+          currentAnswer = s.activity === "searching" ? "*(正在搜索…)*" : "*(正在思考…)*"
+        }
       } else {
         var msg = ai.aiRenderable(s.errorMessage || "")
         currentAnswer = (s.displayedText && s.displayedText.length > 0)
@@ -423,23 +432,45 @@ Item {
     return text
   }
 
+  readonly property var aiWebUrls: ({
+    dsweb: "https://chat.deepseek.com/",
+    gptweb: "https://chatgpt.com/",
+    grokweb: "https://x.com/i/grok"
+  })
+
+  function aiCanRecoverWeb() {
+    var s = ai.aiSession
+    if (!s || s.state !== "error") return false
+    return !!(s.adapterId && ai.aiWebUrls[s.adapterId])
+  }
+
+  function aiOpenWebSite() {
+    var s = ai.aiSession
+    if (!s || !s.adapterId) return
+    var url = ai.aiWebUrls[s.adapterId]
+    if (url) {
+      Quickshell.execDetached(["google-chrome-stable", url])
+    }
+  }
+
   function aiFooterText() {
     var s = ai.aiSession
     var state = s ? s.state : "idle"
     var hint
     if (state === "ready") {
-      if (ai.aiCanReask()) hint = "Enter ask new question · Esc close"
-      else hint = (s && s.canHandoff) ? "↵ continue in terminal · ↓ follow up · Ctrl+C copy · Esc close" : "↓ follow up · Ctrl+C copy · Esc close"
+      if (ai.aiCanReask()) hint = "Enter 提交新问题 · Esc 关闭"
+      else hint = (s && s.canHandoff) ? "↵ 终端继续 · ↓ 追加提问 · Ctrl+C 复制 · Esc 关闭" : "↓ 追加提问 · Ctrl+C 复制 · Esc 关闭"
     } else if (state === "handoff") {
-      hint = "Opening terminal…"
+      hint = "正在打开终端…"
     } else if (state === "error") {
-      hint = "Enter retry · Esc close"
+      if (ai.aiCanRecoverWeb()) hint = "Enter 打开浏览器并重试 · Esc 关闭"
+      else hint = "Enter 重试 · Esc 关闭"
     } else if (state === "starting" || state === "running" || state === "draining") {
-      hint = "Esc cancel"
+      hint = "Esc 取消"
     } else if (ai.aiBinaryMissing) {
-      hint = "Agent CLI not found on PATH · Esc close"
+      hint = "未在系统 PATH 找到 Agent CLI · Esc 关闭"
     } else {
-      hint = ai.aiAgents.length > 1 ? "Enter ask · Tab switch agent · Esc close" : "Enter ask · Esc close"
+      hint = ai.aiAgents.length > 1 ? "Enter 提问 · Tab 切换模型 · Esc 关闭" : "Enter 提问 · Esc 关闭"
     }
     if (ai.aiHandoffError) hint += "\n" + ai.aiHandoffError
     return hint

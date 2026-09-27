@@ -1393,6 +1393,9 @@ for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb",
     if (s) {
       if (s.state !== "error") {
         currentAnswer = aiRenderable(s.displayedText || "")
+        if (!currentAnswer && (s.state === "starting" || s.state === "running")) {
+          currentAnswer = s.activity === "searching" ? "*(正在搜索…)*" : "*(正在思考…)*"
+        }
       } else {
         var msg = aiRenderable(s.errorMessage || "")
         currentAnswer = (s.displayedText && s.displayedText.length > 0)
@@ -1444,12 +1447,21 @@ for (const id of ["claude", "codex", "agy", "opencode", "pi", "dsweb", "gptweb",
   eq(aiFullConversationText([], { state: "ready", displayedText: "Paris is the capital of France" }),
      "Paris is the capital of France", "single turn renders raw answer without prefixes")
 
+  // Thinking state indicator test
+  eq(aiFullConversationText([], { state: "running", displayedText: "" }),
+     "*(正在思考…)*", "single turn thinking state shows thinking indicator")
+
   // Turn 1 added: multi-turn rendering with bold prompt prefixes and divider
   const turns = [{ prompt: "What is capital of France?", answer: "Paris" }]
   const session2 = { state: "running", prompt: "Population?", displayedText: "About 2.1 million" }
   eq(aiFullConversationText(turns, session2),
      "**问**：What is capital of France?\n\nParis\n\n---\n\n**问**：Population?\n\nAbout 2.1 million",
      "multi-turn renders past turns and active turn separated by ---")
+
+  // Multi-turn thinking state
+  eq(aiFullConversationText(turns, { state: "running", prompt: "Population?", displayedText: "" }),
+     "**问**：What is capital of France?\n\nParis\n\n---\n\n**问**：Population?\n\n*(正在思考…)*",
+     "multi-turn shows thinking indicator before first token arrives")
 
   eq(aiFullRawText(turns, session2),
      "问：What is capital of France?\n\nParis\n\n---\n\n问：Population?\n\nAbout 2.1 million",

@@ -34,6 +34,14 @@ Item {
         followUpInput.text = ""
       }
     }
+    function onAiSessionChanged() {
+      var s = panel.ai.aiSession
+      if (panel.menu.opened && s && s.state === "ready" && panel.canFocusFollowUp && !panel.ai.aiPromptChangedSinceSubmit()) {
+        Qt.callLater(function() {
+          panel.focusFollowUp()
+        })
+      }
+    }
   }
 
   Rectangle {
@@ -87,7 +95,7 @@ Item {
       anchors.margins: Style.space(10)
       clip: true
       contentWidth: width
-      contentHeight: aiAnswerText.implicitHeight
+      contentHeight: aiAnswerText.implicitHeight + Style.space(16)
       boundsBehavior: Flickable.StopAtBounds
       property bool pinnedToBottom: true
 
@@ -133,7 +141,7 @@ Item {
       anchors.left: parent.left
       anchors.top: parent.top
       anchors.bottom: parent.bottom
-      anchors.right: sendBtn.left
+      anchors.right: clearBtn.visible ? clearBtn.left : sendBtn.left
       cursorShape: Qt.IBeamCursor
       onClicked: followUpInput.forceActiveFocus()
     }
@@ -142,7 +150,7 @@ Item {
       id: followUpInput
       anchors.left: parent.left
       anchors.leftMargin: Style.space(12)
-      anchors.right: sendBtn.left
+      anchors.right: clearInputBtn.visible ? clearInputBtn.left : (clearBtn.visible ? clearBtn.left : sendBtn.left)
       anchors.rightMargin: Style.space(8)
       anchors.verticalCenter: parent.verticalCenter
       color: panel.menu.foreground
@@ -177,7 +185,71 @@ Item {
             panel.menu.focusSearch()
             event.accepted = true
           }
+        } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+          panel.ai.cycleAiAgent(event.key === Qt.Key_Backtab || (event.modifiers & Qt.ShiftModifier) ? -1 : 1)
+          event.accepted = true
+        } else if ((event.modifiers & Qt.ControlModifier) && (event.key === Qt.Key_L || event.key === Qt.Key_K)) {
+          panel.ai.aiClearHistory()
+          event.accepted = true
+        } else if ((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_C) {
+          if (!followUpInput.selectedText) {
+            panel.ai.aiCopyAnswer()
+            event.accepted = true
+          }
         }
+      }
+    }
+
+    Text {
+      id: clearInputBtn
+      visible: followUpInput.text.length > 0
+      anchors.right: clearBtn.visible ? clearBtn.left : sendBtn.left
+      anchors.rightMargin: Style.space(6)
+      anchors.verticalCenter: parent.verticalCenter
+      text: "󰅖"
+      color: panel.menu.foreground
+      opacity: 0.4
+      font.family: panel.menu.fontFamily
+      font.pixelSize: panel.menu.scaledFont(Style.font.bodySmall)
+
+      MouseArea {
+        anchors.fill: parent
+        anchors.margins: -Style.space(4)
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: {
+          followUpInput.text = ""
+          followUpInput.forceActiveFocus()
+        }
+      }
+    }
+
+    Rectangle {
+      id: clearBtn
+      visible: panel.ai.aiTurns.length > 0
+      anchors.right: sendBtn.left
+      anchors.rightMargin: Style.space(6)
+      anchors.verticalCenter: parent.verticalCenter
+      height: parent.height - Style.space(10)
+      width: clearBtnText.implicitWidth + Style.space(16)
+      radius: Math.max(4, panel.menu.cornerRadius - 2)
+      color: Util.alpha(panel.menu.foreground, 0.08)
+
+      Text {
+        id: clearBtnText
+        anchors.centerIn: parent
+        text: "新对话"
+        color: panel.menu.foreground
+        opacity: 0.75
+        font.family: panel.menu.fontFamily
+        font.pixelSize: panel.menu.scaledFont(Style.font.caption)
+      }
+
+      MouseArea {
+        anchors.fill: parent
+        hoverEnabled: true
+        cursorShape: Qt.PointingHandCursor
+        onClicked: panel.ai.aiClearHistory()
       }
     }
 

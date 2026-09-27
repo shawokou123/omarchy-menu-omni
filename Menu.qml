@@ -2325,9 +2325,19 @@ Item {
           } else if (aiCtl.isAiMode && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
             if (!event.isAutoRepeat) {
               var aiState = aiCtl.aiSession ? aiCtl.aiSession.state : "idle"
-              if (aiState === "idle" || aiState === "error") aiCtl.aiSubmit()
-              else if (aiState === "ready") aiCtl.aiHandoff()
+              if (aiState === "idle") {
+                aiCtl.aiSubmit()
+              } else if (aiState === "error") {
+                if (aiCtl.aiCanRecoverWeb()) aiCtl.aiOpenWebSite()
+                aiCtl.aiSubmit()
+              } else if (aiState === "ready") {
+                aiCtl.aiHandoff()
+              }
             }
+            event.accepted = true
+          } else if (aiCtl.isAiMode && (event.modifiers & Qt.ControlModifier)
+                     && (event.key === Qt.Key_L || event.key === Qt.Key_K)) {
+            aiCtl.aiClearHistory()
             event.accepted = true
           } else if (aiCtl.isAiMode && event.key === Qt.Key_C && event.modifiers === Qt.ControlModifier) {
             aiCtl.aiCopyAnswer()
