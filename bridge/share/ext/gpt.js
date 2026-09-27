@@ -13,7 +13,7 @@
 //     and reported as its own error rather than as a missing composer.
 
 (() => {
-  const BUILD = "__BUILD__" // rewritten to the manifest version when packing
+  const BUILD = (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) ? chrome.runtime.getManifest().version : "1.44"
   // A fresh injection into a page that already carries an older build must
   // retire that build's listener, or both would answer the same question.
   if (typeof window.__omarchyGptwebRetire === "function") window.__omarchyGptwebRetire()

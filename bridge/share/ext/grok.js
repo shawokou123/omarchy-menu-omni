@@ -4,7 +4,7 @@
 // the diffing.
 
 (() => {
-  const BUILD = "__BUILD__" // rewritten to the manifest version when packing
+  const BUILD = (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) ? chrome.runtime.getManifest().version : "1.44"
   if (typeof window.__omarchyGrokwebRetire === "function") window.__omarchyGrokwebRetire()
   if (window.__omarchyGrokwebLoaded === BUILD) return
   window.__omarchyGrokwebLoaded = BUILD

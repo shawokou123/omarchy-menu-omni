@@ -18,7 +18,7 @@ const SITES = {
   },
   gptweb: {
     label: "ChatGPT",
-    match: "https://chatgpt.com/*",
+    match: ["https://chatgpt.com/*", "https://chat.openai.com/*"],
     home: "https://chatgpt.com/",
     file: "gpt.js",
   },
@@ -116,15 +116,16 @@ async function pingTab(tabId) {
 }
 
 async function ensureContent(tabId, file) {
-  if (await pingTab(tabId)) return true
+  if (await pingTab(tabId)) return { ok: true }
   // Declarative content scripts only apply to pages loaded after install, so a
   // tab that was already open needs a manual injection.
   try {
     await chrome.scripting.executeScript({ target: { tabId }, files: [file] })
   } catch (e) {
-    return false
+    return { ok: false, error: "executeScript: " + (e && e.message ? e.message : String(e)) }
   }
-  return (await pingTab(tabId)) !== null
+  if (await pingTab(tabId)) return { ok: true }
+  return { ok: false, error: "pingTab returned null after injection" }
 }
 
 async function deliver(msg) {
@@ -163,14 +164,17 @@ async function deliver(msg) {
     await new Promise((r) => setTimeout(r, 4000))
     build = null
   }
-  if (build === null && !(await ensureContent(tab.id, site.file))) {
-    send({
-      op: "error",
-      id: msg.id,
-      kind: "no-content",
-      message: "The " + site.label + " tab did not accept the bridge script (try reloading that tab)",
-    })
-    return
+  if (build === null) {
+    const res = await ensureContent(tab.id, site.file)
+    if (!res.ok) {
+      send({
+        op: "error",
+        id: msg.id,
+        kind: "no-content",
+        message: "The " + site.label + " tab (" + (tab.url || "no-url") + ") did not accept the bridge script (" + res.error + ")",
+      })
+      return
+    }
   }
   try {
     await chrome.tabs.sendMessage(tab.id, msg)

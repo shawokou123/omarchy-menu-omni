@@ -8,7 +8,7 @@
 // exists to re-calibrate them against a live page.
 
 (() => {
-  const BUILD = "__BUILD__" // rewritten to the manifest version when packing
+  const BUILD = (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getManifest) ? chrome.runtime.getManifest().version : "1.44"
   // A fresh injection into a page that already carries an older build must
   // retire that build's listener, or both would answer the same question.
   if (typeof window.__omarchyDswebRetire === "function") window.__omarchyDswebRetire()

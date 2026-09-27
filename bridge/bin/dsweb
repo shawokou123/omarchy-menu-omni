@@ -276,7 +276,10 @@ def main(argv):
             return fail(err)
         for event in outcome.get("events", []):
             if event.get("type") == "probe":
-                print(json.dumps(event.get("data"), indent=2, ensure_ascii=False))
+                try:
+                    print(json.dumps(event.get("data"), indent=2, ensure_ascii=False))
+                except UnicodeEncodeError:
+                    print(json.dumps(event.get("data"), indent=2, ensure_ascii=True))
             elif event.get("type") == "status":
                 print(json.dumps(event, separators=(",", ":")))
             elif event.get("type") == "error":
