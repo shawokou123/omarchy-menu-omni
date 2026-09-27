@@ -33,7 +33,7 @@ MAX_FILE_BYTES = 500_000
 USAGE = "usage: dsweb [-s dsweb|gptweb|grokweb] ask <prompt> | probe | selftest | status\n"
 
 FILE_REF_PATTERN = re.compile(
-    r"""(?:^|(?<=[\s，。！？；;：:（）\(\)\[\]\{\}\<\>]))@(?:"([^"\n\r]+)"|\'([^\'\n\r]+)\'|([^\s，。！？；;：:（）\(\)\[\]\{\}\<\>"\']+))"""
+    r"""(?<![a-zA-Z0-9_.-])@(?:"([^"\n\r]+)"|'([^'\n\r]+)'|([^\s,，。！？!?；;:：（）\(\)\[\]\{\}\<\>"'、“”‘’《》【】「」『』]+))"""
 )
 
 
@@ -65,6 +65,28 @@ def resolve_file_path(raw):
             if os.path.isfile(cand):
                 return cand
     return None
+
+
+def find_file_in_raw(raw):
+    raw = raw.strip()
+    if not raw:
+        return None, 0
+    cand = resolve_file_path(raw)
+    if cand:
+        return cand, len(raw)
+    stripped = raw.rstrip(".,;:!?，。！？、；：")
+    if stripped and stripped != raw:
+        cand = resolve_file_path(stripped)
+        if cand:
+            return cand, len(stripped)
+    for i in range(len(raw) - 1, 1, -1):
+        prefix = raw[:i].rstrip(".,;:!?，。！？、；：")
+        if not prefix:
+            continue
+        cand = resolve_file_path(prefix)
+        if cand:
+            return cand, len(prefix)
+    return None, len(raw)
 
 
 def looks_like_file_ref(p):
@@ -132,7 +154,13 @@ def expand_prompt_files(prompt):
         raw_path = m.group(1) or m.group(2) or m.group(3)
         if not raw_path:
             continue
-        resolved = resolve_file_path(raw_path)
+        is_quoted = bool(m.group(1) or m.group(2))
+        if is_quoted:
+            resolved = resolve_file_path(raw_path)
+            matched_len = len(raw_path)
+        else:
+            resolved, matched_len = find_file_in_raw(raw_path)
+
         if not resolved:
             if looks_like_file_ref(raw_path):
                 return None, "未找到指定的文件: %s" % raw_path
@@ -141,7 +169,11 @@ def expand_prompt_files(prompt):
         if err:
             return None, err
         replacement = format_file_insertion(resolved, content)
-        start, end = m.span()
+        start = m.start()
+        if is_quoted:
+            end = m.end()
+        else:
+            end = start + 1 + matched_len
         result = result[:start] + replacement + result[end:]
 
     return result.strip(), None
